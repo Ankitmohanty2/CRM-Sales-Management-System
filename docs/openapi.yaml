@@ -1,0 +1,958 @@
+openapi: 3.0.3
+info:
+  title: CRM Sales Management API
+  version: 1.0.0
+  description: |
+    Backend API for the sales lifecycle: lead generation, qualification, conversion, customers, deals, activities, and analytics.
+
+    Authentication uses a short-lived JWT access token (`Authorization: Bearer`) and a rotating refresh token stored only in an HttpOnly cookie named `refreshToken`.
+
+    Public registration is disabled unless `ALLOW_PUBLIC_REGISTRATION=true`. When enabled it creates a Sales Executive and rejects `role`, `team`, and `isActive`. The first Admin is created only from `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` when no admin exists.
+
+    Lead conversion and other audited writes use MongoDB transactions. The database must be a replica set or a compatible sharded cluster.
+
+    Deal probability can be changed only while the deal is open. Won deals force probability to 100. Lost deals force probability to 0 and require a reason. Closed deals cannot return to an open stage except through `POST /deals/{id}/reopen` (Admin only).
+
+    Activity status Overdue is calculated at read time. Completed activities never become overdue.
+    Conversion rate is converted leads divided by total leads in scope, as a percentage, or 0 when there are no leads.
+servers:
+  - url: http://localhost:5000
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    Id:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, pattern: '^[a-fA-F0-9]{24}$' }
+    Page:
+      in: query
+      name: page
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      in: query
+      name: limit
+      schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+    Search:
+      in: query
+      name: search
+      schema: { type: string, maxLength: 100 }
+    SortBy:
+      in: query
+      name: sortBy
+      schema: { type: string }
+    SortOrder:
+      in: query
+      name: sortOrder
+      schema: { type: string, enum: [asc, desc], default: desc }
+    From:
+      in: query
+      name: from
+      schema: { type: string, format: date-time }
+    To:
+      in: query
+      name: to
+      schema: { type: string, format: date-time }
+  responses:
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Authentication required or token rejected
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Authenticated user lacks permission
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Missing resource or outside the caller scope
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Conflict with current state
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    TooManyRequests:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Success:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string }
+        data:
+          description: Resource or list payload
+        meta:
+          type: object
+          additionalProperties: true
+    Error:
+      type: object
+      required: [success, message, errors]
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              message: { type: string }
+    Pagination:
+      type: object
+      required: [page, limit, totalRecords, totalPages]
+      properties:
+        page: { type: integer, example: 1 }
+        limit: { type: integer, example: 10 }
+        totalRecords: { type: integer, example: 1 }
+        totalPages: { type: integer, example: 1 }
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, example: admin@example.com }
+        password: { type: string, example: replace-with-your-password }
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [name, email, password]
+      properties:
+        name: { type: string, example: New Seller }
+        email: { type: string, format: email, example: seller@example.com }
+        password: { type: string, minLength: 8, example: Password1 }
+        phone: { type: string, example: '4155550100' }
+    PasswordChange:
+      type: object
+      additionalProperties: false
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string }
+        newPassword: { type: string, minLength: 8 }
+    UserCreate:
+      type: object
+      additionalProperties: false
+      required: [name, email, password, role]
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        phone: { type: string }
+        role: { type: string, enum: [Admin, Sales Manager, Sales Executive] }
+        teamId: { type: string }
+        teamName: { type: string, example: West }
+        isActive: { type: boolean }
+    UserUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        password: { type: string, minLength: 8 }
+        role: { type: string, enum: [Admin, Sales Manager, Sales Executive] }
+        teamId: { type: string }
+        teamName: { type: string }
+    UserStatus:
+      type: object
+      additionalProperties: false
+      required: [isActive]
+      properties:
+        isActive: { type: boolean }
+    LeadWrite:
+      type: object
+      additionalProperties: false
+      required: [name, email]
+      properties:
+        name: { type: string, example: Northwind Manufacturing }
+        email: { type: string, format: email, example: buyer@northwind.example }
+        phone: { type: string }
+        company: { type: string }
+        source: { type: string, enum: [Website, Referral, Social Media, Email, Phone, Other] }
+        priority: { type: string, enum: [Low, Medium, High] }
+        description: { type: string }
+        assignedTo: { type: string, description: Required for Admin and Sales Manager. Executives are assigned to themselves. }
+    LeadUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        company: { type: string }
+        source: { type: string, enum: [Website, Referral, Social Media, Email, Phone, Other] }
+        priority: { type: string, enum: [Low, Medium, High] }
+        description: { type: string }
+    LeadStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [New, Contacted, Qualified, Unqualified, Converted, Lost] }
+    Assignment:
+      type: object
+      additionalProperties: false
+      required: [assignedTo]
+      properties:
+        assignedTo: { type: string }
+        reason: { type: string }
+    ConvertRequest:
+      type: object
+      additionalProperties: false
+      required: [deal]
+      properties:
+        deal:
+          type: object
+          additionalProperties: false
+          required: [name, value, probability, expectedClosingDate]
+          properties:
+            name: { type: string, example: Enterprise CRM Subscription }
+            value: { type: number, minimum: 0, exclusiveMinimum: true, example: 100000 }
+            probability: { type: integer, minimum: 0, maximum: 100, example: 30 }
+            expectedClosingDate: { type: string, format: date-time, example: '2026-12-31T00:00:00.000Z' }
+            stage: { type: string, enum: [Qualification, Discovery, Proposal, Negotiation] }
+            description: { type: string }
+    Address:
+      type: object
+      additionalProperties: false
+      properties:
+        street: { type: string }
+        city: { type: string }
+        state: { type: string }
+        postalCode: { type: string }
+        country: { type: string }
+    CustomerWrite:
+      type: object
+      additionalProperties: false
+      required: [name, email]
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        company: { type: string }
+        address: { $ref: '#/components/schemas/Address' }
+        assignedTo: { type: string }
+        status: { type: string, enum: [Active, Inactive] }
+    CustomerUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        company: { type: string }
+        address: { $ref: '#/components/schemas/Address' }
+        status: { type: string, enum: [Active, Inactive] }
+    DealWrite:
+      type: object
+      additionalProperties: false
+      required: [name, customer, value, expectedClosingDate]
+      properties:
+        name: { type: string }
+        customer: { type: string }
+        lead: { type: string }
+        assignedTo: { type: string }
+        value: { type: number, minimum: 0, exclusiveMinimum: true }
+        probability: { type: integer, minimum: 0, maximum: 100 }
+        expectedClosingDate: { type: string, format: date-time }
+        stage: { type: string, enum: [Qualification, Discovery, Proposal, Negotiation] }
+        description: { type: string }
+    DealUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        value: { type: number, minimum: 0, exclusiveMinimum: true }
+        probability: { type: integer, minimum: 0, maximum: 100 }
+        expectedClosingDate: { type: string, format: date-time }
+        description: { type: string }
+    DealStage:
+      type: object
+      additionalProperties: false
+      required: [stage]
+      properties:
+        stage: { type: string, enum: [Qualification, Discovery, Proposal, Negotiation, Won, Lost] }
+        lostReason: { type: string, description: Required when stage is Lost }
+    DealReopen:
+      type: object
+      additionalProperties: false
+      required: [reason, stage, probability]
+      properties:
+        reason: { type: string }
+        stage: { type: string, enum: [Qualification, Discovery, Proposal, Negotiation] }
+        probability: { type: integer, minimum: 0, maximum: 100 }
+    ActivityWrite:
+      type: object
+      additionalProperties: false
+      required: [type, title, relatedEntityType, relatedEntityId]
+      properties:
+        type: { type: string, enum: [Call, Email, Meeting, Demo, Follow-up, Reminder, Note] }
+        title: { type: string }
+        description: { type: string }
+        dueDate: { type: string, format: date-time }
+        assignedTo: { type: string }
+        relatedEntityType: { type: string, enum: [Lead, Customer, Deal, User] }
+        relatedEntityId: { type: string }
+    ActivityUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        type: { type: string, enum: [Call, Email, Meeting, Demo, Follow-up, Reminder, Note] }
+        title: { type: string }
+        description: { type: string }
+        dueDate: { type: string, format: date-time, nullable: true }
+        assignedTo: { type: string }
+    ConfigUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        companyName: { type: string }
+        defaultLeadSource: { type: string, enum: [Website, Referral, Social Media, Email, Phone, Other] }
+        defaultLeadPriority: { type: string, enum: [Low, Medium, High] }
+        defaultDealStage: { type: string, enum: [Qualification, Discovery, Proposal, Negotiation] }
+        defaultDealProbability: { type: integer, minimum: 0, maximum: 100 }
+paths:
+  /api/v1/health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: Service and database are available. No credentials or connection strings are returned.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '503':
+          description: Database is disconnected
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /api/v1/auth/register:
+    post:
+      summary: Register a sales executive when public registration is enabled
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201': { description: "Registered" }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { description: "Public registration disabled" }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /api/v1/auth/login:
+    post:
+      summary: Login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200': { description: "Access token issued and refresh cookie set" }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { description: "Invalid credentials" }
+        '403': { description: "Inactive account" }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /api/v1/auth/refresh:
+    post:
+      summary: Rotate refresh token
+      security: []
+      description: Requires the refreshToken cookie. Reuse of a revoked token revokes the token family.
+      responses:
+        '200': { description: "New access token" }
+        '401': { description: "Invalid, expired, or reused refresh token" }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke the current refresh token
+      security: []
+      responses:
+        '200': { description: "Logged out" }
+  /api/v1/auth/logout-all:
+    post:
+      summary: Revoke every refresh token for the current user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Sessions revoked" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/me:
+    get:
+      summary: Current user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Profile without a password hash" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/me/password:
+    patch:
+      summary: Change password and revoke refresh tokens
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordChange' }
+      responses:
+        '200': { description: "Password changed" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/users:
+    post:
+      summary: Create a user
+      description: Admin only. Sales Manager and Sales Executive require a teamId or teamName.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCreate' }
+      responses:
+        '201': { description: "Created" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      summary: List users
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Search' }
+        - { $ref: '#/components/parameters/SortBy' }
+        - { $ref: '#/components/parameters/SortOrder' }
+        - { in: query, name: role, schema: { type: string, enum: [Admin, Sales Manager, Sales Executive] } }
+        - { in: query, name: team, schema: { type: string } }
+        - { in: query, name: isActive, schema: { type: string, enum: ['true', 'false'] } }
+      responses:
+        '200': { description: "Users" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/users/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    get:
+      summary: Get user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "User" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Update user
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserUpdate' }
+      responses:
+        '200': { description: "Updated" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      summary: Deactivate user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Deactivated" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: "Active resources remain or last admin" }
+  /api/v1/users/{id}/status:
+    patch:
+      summary: Activate or deactivate a user
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserStatus' }
+      responses:
+        '200': { description: "Status updated" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/leads:
+    post:
+      summary: Create a lead
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LeadWrite' }
+      responses:
+        '201': { description: "Created" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    get:
+      summary: List leads in the caller scope
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Search' }
+        - { $ref: '#/components/parameters/SortBy' }
+        - { $ref: '#/components/parameters/SortOrder' }
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+        - { in: query, name: status, schema: { type: string, enum: [New, Contacted, Qualified, Unqualified, Converted, Lost] } }
+        - { in: query, name: priority, schema: { type: string, enum: [Low, Medium, High] } }
+        - { in: query, name: source, schema: { type: string, enum: [Website, Referral, Social Media, Email, Phone, Other] } }
+        - { in: query, name: assignedTo, schema: { type: string } }
+      responses:
+        '200': { description: "Leads and pagination metadata" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/leads/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    get:
+      summary: Get lead
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Lead" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Update lead fields
+      description: Status, assignee, converted customer, and creator are not accepted here.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LeadUpdate' }
+      responses:
+        '200': { description: "Updated" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      summary: Delete a lead with no conversion or related records
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Deleted" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "Related records exist" }
+  /api/v1/leads/{id}/status:
+    patch:
+      summary: Change lead status
+      description: Allowed graph is New to Contacted, Contacted to Qualified or Unqualified or Lost, and Qualified to Lost. Converted is set only by conversion.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LeadStatus' }
+      responses:
+        '200': { description: "Status changed" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { description: "Invalid transition" }
+  /api/v1/leads/{id}/assignment:
+    patch:
+      summary: Assign or reassign a lead
+      description: Admin and Sales Manager only. Managers can assign only to active Sales Executives on their team.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Assignment' }
+      responses:
+        '200': { description: "Assigned" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: "Concurrent modification" }
+        '422': { description: "Assignee is not an active sales executive" }
+  /api/v1/leads/{id}/convert:
+    post:
+      summary: Convert a qualified lead
+      description: Creates a customer from the lead, a deal from the request, and audit events in one transaction. A lead can be converted once. Customer fields in this body are rejected.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConvertRequest' }
+      responses:
+        '201': { description: "Converted" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "Already converted" }
+        '422': { description: "Lead is not qualified" }
+        '503': { description: "Transactions are unavailable" }
+  /api/v1/customers:
+    post:
+      summary: Create a customer
+      description: originalLead cannot be set by the client. It is written only by conversion.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CustomerWrite' }
+      responses:
+        '201': { description: "Created" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    get:
+      summary: List customers in the caller scope
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Search' }
+        - { $ref: '#/components/parameters/SortBy' }
+        - { $ref: '#/components/parameters/SortOrder' }
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+        - { in: query, name: status, schema: { type: string, enum: [Active, Inactive] } }
+        - { in: query, name: assignedTo, schema: { type: string } }
+      responses:
+        '200': { description: "Customers" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/customers/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    get:
+      summary: Get customer
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Customer" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Update customer
+      description: originalLead cannot be changed. A partial address is merged with the stored address.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CustomerUpdate' }
+      responses:
+        '200': { description: "Updated" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      summary: Delete a customer
+      description: Rejected when the customer came from lead conversion or still has deals.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Deleted" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "Historical conversion or deals exist" }
+  /api/v1/deals:
+    post:
+      summary: Create a deal
+      description: expectedRevenue is calculated on the server as value * probability / 100. New deals must use an open stage. Clients cannot send expectedRevenue.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DealWrite' }
+      responses:
+        '201': { description: "Created" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+    get:
+      summary: List deals in the caller scope
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Search' }
+        - { $ref: '#/components/parameters/SortBy' }
+        - { $ref: '#/components/parameters/SortOrder' }
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+        - { in: query, name: stage, schema: { type: string, enum: [Qualification, Discovery, Proposal, Negotiation, Won, Lost] } }
+        - { in: query, name: status, schema: { type: string, enum: [open, won, lost] } }
+        - { in: query, name: assignedTo, schema: { type: string } }
+        - { in: query, name: minValue, schema: { type: number } }
+        - { in: query, name: maxValue, schema: { type: number } }
+        - { in: query, name: closingFrom, schema: { type: string, format: date-time } }
+        - { in: query, name: closingTo, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: "Deals" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/deals/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    get:
+      summary: Get deal
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Deal" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Update an open deal
+      description: Closed deals cannot be patched. Probability can change only while the deal is open. expectedRevenue is recalculated on the server.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DealUpdate' }
+      responses:
+        '200': { description: "Updated" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "Deal is closed" }
+    delete:
+      summary: Delete an open deal
+      description: Sales Executives cannot delete deals. Won and Lost deals cannot be deleted.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Deleted" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: "Closed deal" }
+  /api/v1/deals/{id}/stage:
+    patch:
+      summary: Change deal stage
+      description: Open stages may move to any other open stage or to Won or Lost. Lost requires lostReason. Won sets probability to 100 and closedAt. Lost sets probability to 0 and closedAt.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DealStage' }
+      responses:
+        '200': { description: "Stage changed" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { description: "Invalid transition or missing lost reason" }
+  /api/v1/deals/{id}/assignment:
+    patch:
+      summary: Assign a deal
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Assignment' }
+      responses:
+        '200': { description: "Assigned" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/deals/{id}/reopen:
+    post:
+      summary: Reopen a closed deal
+      description: Admin only. Requires a reason, an open stage, and a probability. Writes an audit event.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DealReopen' }
+      responses:
+        '200': { description: "Reopened" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: "Not an admin" }
+  /api/v1/activities:
+    post:
+      summary: Create an activity
+      description: Status and completedAt are server-controlled and are rejected if the client sends them. Notes may omit dueDate. Other types require dueDate.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActivityWrite' }
+      responses:
+        '201': { description: "Created" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { description: "Related record was not found" }
+    get:
+      summary: List activities
+      description: status=Overdue returns pending activities whose dueDate is in the past. Completed activities are never overdue.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Search' }
+        - { $ref: '#/components/parameters/SortBy' }
+        - { $ref: '#/components/parameters/SortOrder' }
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+        - { in: query, name: type, schema: { type: string, enum: [Call, Email, Meeting, Demo, Follow-up, Reminder, Note] } }
+        - { in: query, name: status, schema: { type: string, enum: [Pending, Completed, Overdue] } }
+        - { in: query, name: assignedTo, schema: { type: string } }
+        - { in: query, name: relatedEntityType, schema: { type: string, enum: [Lead, Customer, Deal, User] } }
+        - { in: query, name: relatedEntityId, schema: { type: string } }
+        - { in: query, name: dueFrom, schema: { type: string, format: date-time } }
+        - { in: query, name: dueTo, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: "Activities" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/activities/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/Id' }
+    get:
+      summary: Get activity
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Activity" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Update a pending activity
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActivityUpdate' }
+      responses:
+        '200': { description: "Updated" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: "Completed activity" }
+    delete:
+      summary: Delete a pending activity
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Deleted" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: "Completed activity" }
+  /api/v1/activities/{id}/complete:
+    patch:
+      summary: Complete an activity
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200': { description: "Completed" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: "Already completed" }
+  /api/v1/timeline/leads/{id}:
+    get:
+      summary: Lead audit timeline
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/SortBy' }
+        - { $ref: '#/components/parameters/SortOrder' }
+      responses:
+        '200': { description: "Timeline" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/timeline/customers/{id}:
+    get:
+      summary: Customer audit timeline
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: "Timeline" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/timeline/deals/{id}:
+    get:
+      summary: Deal audit timeline
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: "Timeline" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/analytics/overview:
+    get:
+      summary: Sales overview
+      description: Conversion rate is converted leads divided by total leads in scope, as a percentage. It is 0 when there are no leads. Won revenue sums Won deal value only.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+      responses:
+        '200': { description: "Overview" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/analytics/pipeline:
+    get:
+      summary: Pipeline by stage
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+      responses:
+        '200': { description: "Pipeline" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/analytics/team-performance:
+    get:
+      summary: Performance grouped by user
+      description: Qualified counts include leads currently Qualified or Converted. Rows are limited to the caller scope.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+      responses:
+        '200': { description: "Team performance" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/config:
+    get:
+      summary: Read CRM settings
+      description: Admin only. Security settings are not exposed.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: "Settings" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    patch:
+      summary: Update allowlisted CRM settings
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfigUpdate' }
+      responses:
+        '200': { description: "Updated" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api-docs:
+    get:
+      summary: Swagger UI
+      security: []
+      responses:
+        '200': { description: "API documentation" }

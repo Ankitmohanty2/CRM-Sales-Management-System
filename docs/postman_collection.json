@@ -1,0 +1,500 @@
+{
+  "info": {
+    "name": "CRM Sales Management API",
+    "description": "Use the Login request first. It stores the access token in the collection variable accessToken. Refresh tokens are HttpOnly cookies; enable Postman's cookie jar for /api/v1/auth/refresh and /api/v1/auth/logout. Public registration is disabled unless ALLOW_PUBLIC_REGISTRATION=true. Do not put real secrets in this collection.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000" },
+    { "key": "accessToken", "value": "" },
+    { "key": "leadId", "value": "" },
+    { "key": "customerId", "value": "" },
+    { "key": "dealId", "value": "" },
+    { "key": "activityId", "value": "" },
+    { "key": "userId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Assignment workflow",
+      "description": "Run these requests from top to bottom. Replace the login password with your local bootstrap password. Do not save a real password in this file. Enable the Postman cookie jar for refresh and logout.",
+      "item": [
+        {
+          "name": "1. Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('login succeeded', function () { pm.expect(body.success).to.eql(true); });",
+                  "if (body.data && body.data.accessToken) pm.collectionVariables.set('accessToken', body.data.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"replace-with-bootstrap-password\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2. Create sales executive",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.data && body.data._id) pm.collectionVariables.set('userId', body.data._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/users",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Eva Executive\",\n  \"email\": \"eva.workflow@example.com\",\n  \"password\": \"Password1\",\n  \"phone\": \"4155550199\",\n  \"role\": \"Sales Executive\",\n  \"teamName\": \"West\"\n}"
+            }
+          }
+        },
+        {
+          "name": "3. Create lead",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.data && body.data._id) pm.collectionVariables.set('leadId', body.data._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/leads",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Northwind Manufacturing\",\n  \"email\": \"buyer.workflow@northwind.example\",\n  \"phone\": \"4155550100\",\n  \"company\": \"Northwind\",\n  \"source\": \"Website\",\n  \"priority\": \"High\",\n  \"description\": \"Enterprise interest\",\n  \"assignedTo\": \"{{userId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "4. Mark lead contacted",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/status",
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"Contacted\"\n}" }
+          }
+        },
+        {
+          "name": "5. Qualify lead",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/status",
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"Qualified\"\n}" }
+          }
+        },
+        {
+          "name": "6. Convert lead",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.data && body.data.customer) pm.collectionVariables.set('customerId', body.data.customer._id);",
+                  "if (body.data && body.data.deal) pm.collectionVariables.set('dealId', body.data.deal._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/convert",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deal\": {\n    \"name\": \"Enterprise CRM Subscription\",\n    \"value\": 100000,\n    \"probability\": 30,\n    \"expectedClosingDate\": \"2026-12-31T00:00:00.000Z\",\n    \"stage\": \"Qualification\",\n    \"description\": \"Initial opportunity\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "7. Move deal to Proposal",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/deals/{{dealId}}/stage",
+            "body": { "mode": "raw", "raw": "{\n  \"stage\": \"Proposal\"\n}" }
+          }
+        },
+        {
+          "name": "8. Read deal",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/deals/{{dealId}}"
+          }
+        },
+        {
+          "name": "9. Analytics overview",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/analytics/overview"
+          }
+        },
+        {
+          "name": "10. Pipeline",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/analytics/pipeline"
+          }
+        },
+        {
+          "name": "11. Lead timeline",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/timeline/leads/{{leadId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"New Seller\",\n  \"email\": \"seller@example.com\",\n  \"password\": \"Password1\"\n}"
+            },
+            "description": "Creates a Sales Executive only when public registration is enabled. Role and team are rejected."
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.data && body.data.accessToken) {",
+                  "  pm.collectionVariables.set('accessToken', body.data.accessToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"ChangeThisPassword1\"\n}"
+            },
+            "description": "Returns an access token and sets the refreshToken cookie. Replace the password with the bootstrap admin password from your local environment. Do not commit that password."
+          }
+        },
+        {
+          "name": "Refresh",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.data && body.data.accessToken) {",
+                  "  pm.collectionVariables.set('accessToken', body.data.accessToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/auth/refresh",
+            "description": "Requires the refreshToken cookie from Login. Reuse of an old cookie revokes the token family."
+          }
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/auth/me"
+          }
+        },
+        {
+          "name": "Change password",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/me/password",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"ChangeThisPassword1\",\n  \"newPassword\": \"ChangeThisPassword2\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/auth/logout" }
+        },
+        {
+          "name": "Logout all",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/auth/logout-all"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Create user",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const body = pm.response.json();", "if (body.data && body.data._id) pm.collectionVariables.set('userId', body.data._id);"] } }],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/users",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Eva Executive\",\n  \"email\": \"eva@example.com\",\n  \"password\": \"Password1\",\n  \"phone\": \"4155550199\",\n  \"role\": \"Sales Executive\",\n  \"teamName\": \"West\"\n}" }
+          }
+        },
+        {
+          "name": "List users",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/users?page=1&limit=10&search=eva&role=Sales%20Executive"
+          }
+        },
+        {
+          "name": "Update status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/users/{{userId}}/status",
+            "body": { "mode": "raw", "raw": "{\n  \"isActive\": true\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Leads",
+      "item": [
+        {
+          "name": "Create lead",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const body = pm.response.json();", "if (body.data && body.data._id) pm.collectionVariables.set('leadId', body.data._id);"] } }],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/leads",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Northwind Manufacturing\",\n  \"email\": \"buyer@northwind.example\",\n  \"phone\": \"4155550100\",\n  \"company\": \"Northwind\",\n  \"source\": \"Website\",\n  \"priority\": \"High\",\n  \"description\": \"Enterprise interest\"\n}" }
+          }
+        },
+        {
+          "name": "List leads",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/leads?page=1&limit=10&search=northwind&status=New&sortBy=createdAt&sortOrder=desc"
+          }
+        },
+        {
+          "name": "Update status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/status",
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"Contacted\"\n}" }
+          }
+        },
+        {
+          "name": "Convert lead",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const body = pm.response.json();", "if (body.data && body.data.customer) pm.collectionVariables.set('customerId', body.data.customer._id);", "if (body.data && body.data.deal) pm.collectionVariables.set('dealId', body.data.deal._id);"] } }],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/convert",
+            "description": "The lead must already be Qualified. The customer is copied from the lead. The deal fields in this body are the only client-supplied conversion data.",
+            "body": { "mode": "raw", "raw": "{\n  \"deal\": {\n    \"name\": \"Enterprise CRM Subscription\",\n    \"value\": 100000,\n    \"probability\": 30,\n    \"expectedClosingDate\": \"2026-12-31T00:00:00.000Z\",\n    \"stage\": \"Qualification\",\n    \"description\": \"Initial opportunity\"\n  }\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Deals",
+      "item": [
+        {
+          "name": "Update stage",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/deals/{{dealId}}/stage",
+            "body": { "mode": "raw", "raw": "{\n  \"stage\": \"Proposal\"\n}" }
+          }
+        },
+        {
+          "name": "Mark lost",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/deals/{{dealId}}/stage",
+            "body": { "mode": "raw", "raw": "{\n  \"stage\": \"Lost\",\n  \"lostReason\": \"Budget cut\"\n}" }
+          }
+        },
+        {
+          "name": "Reopen",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/deals/{{dealId}}/reopen",
+            "description": "Admin only.",
+            "body": { "mode": "raw", "raw": "{\n  \"reason\": \"Customer asked to restart\",\n  \"stage\": \"Negotiation\",\n  \"probability\": 40\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Activities",
+      "item": [
+        {
+          "name": "Create activity",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const body = pm.response.json();", "if (body.data && body.data._id) pm.collectionVariables.set('activityId', body.data._id);"] } }],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/activities",
+            "body": { "mode": "raw", "raw": "{\n  \"type\": \"Call\",\n  \"title\": \"Intro call\",\n  \"dueDate\": \"2026-10-01T00:00:00.000Z\",\n  \"relatedEntityType\": \"Lead\",\n  \"relatedEntityId\": \"{{leadId}}\"\n}" }
+          }
+        },
+        {
+          "name": "Complete activity",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/activities/{{activityId}}/complete"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Analytics and config",
+      "item": [
+        {
+          "name": "Overview",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/analytics/overview"
+          }
+        },
+        {
+          "name": "Pipeline",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/analytics/pipeline"
+          }
+        },
+        {
+          "name": "Team performance",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/analytics/team-performance"
+          }
+        },
+        {
+          "name": "Get config",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": "{{baseUrl}}/api/v1/config"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/health" }
+    }
+  ]
+}
