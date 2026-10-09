@@ -74,6 +74,7 @@ See [.env.example](.env.example). The process validates required variables on st
 | `CORS_ORIGINS` | Comma-separated browser origins |
 | `COOKIE_SECURE` | `true` in production so the refresh cookie is Secure |
 | `ALLOW_PUBLIC_REGISTRATION` | `false` by default |
+| `API_BASE_URL` | Optional public origin. When set, Swagger selects it by default and still lists `http://localhost:5000`. When empty, Swagger uses the host of the current request. |
 | `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD` | Optional first admin |
 | `RATE_LIMIT_*`, `AUTH_RATE_LIMIT_*` | General and login/refresh limits |
 
@@ -360,7 +361,7 @@ Clients cannot update or delete audit entries. Passwords, tokens, and authorizat
 
 ## Deployment
 
-Run `npm start` behind a TLS-terminating proxy. Set `NODE_ENV=production`, `COOKIE_SECURE=true`, a replica-set `MONGODB_URI`, distinct JWT secrets, and an explicit `CORS_ORIGINS` list. The process closes the HTTP server and the MongoDB connection on `SIGINT` and `SIGTERM`.
+Run `npm start` behind a TLS-terminating proxy. Set `NODE_ENV=production`, `COOKIE_SECURE=true`, a replica-set `MONGODB_URI`, distinct JWT secrets, and an explicit `CORS_ORIGINS` list. Set `API_BASE_URL` to the public origin, such as `https://crm-sales-management-system-bo1l.onrender.com`, so the Swagger server dropdown defaults to that deployment. The process closes the HTTP server and the MongoDB connection on `SIGINT` and `SIGTERM`.
 
 This repository does not deploy the API and does not contain hosting credentials.
 

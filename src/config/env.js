@@ -35,6 +35,10 @@ const envSchema = z.object({
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   ALLOW_PUBLIC_REGISTRATION: envBoolean('false'),
+  API_BASE_URL: z.preprocess((value) => {
+    if (value === undefined || value === '') return undefined;
+    return String(value).trim().replace(/\/$/, '');
+  }, z.string().url().optional()),
   BOOTSTRAP_ADMIN_EMAIL: z.preprocess(emptyToUndefined, z.string().email().optional()),
   BOOTSTRAP_ADMIN_PASSWORD: z.preprocess(emptyToUndefined, z.string().min(8).optional()),
   BOOTSTRAP_ADMIN_NAME: z.string().min(1).max(100).default('System Admin'),
@@ -54,6 +58,16 @@ const envSchema = z.object({
       message: 'BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD must both be set or both be omitted',
       path: ['BOOTSTRAP_ADMIN_EMAIL'],
     });
+  }
+  if (value.API_BASE_URL) {
+    const url = new URL(value.API_BASE_URL);
+    if (url.username || url.password) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'API_BASE_URL must not include credentials',
+        path: ['API_BASE_URL'],
+      });
+    }
   }
 });
 
